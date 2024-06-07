@@ -25,7 +25,12 @@ def get_model(args):
             args.num_classes, 
             img_size=args.size, 
             patch=args.patch, 
-            dropout=args.dropout, 
+            mlp_dropout=args.mlp_dropout, 
+            attn_dropout=args.attn_dropout,
+            qk_dropout=args.qk_dropout,
+            dropout_on=args.dropout_on,
+            dropkey=args.dropkey,
+            mask_ratio=args.mask_ratio,
             mlp_hidden=args.mlp_hidden,
             num_layers=args.num_layers,
             hidden=args.hidden,
@@ -123,5 +128,18 @@ def get_experiment_name(args):
         experiment_name+="_mu"
     if args.off_cls_token:
         experiment_name+="_gap"
+    if args.dropout_on == 'k':
+        experiment_name+="_kdrop"
+        experiment_name+="_krate_{}".format(args.qk_dropout)
+    if args.dropout_on =='q':
+        experiment_name+="_qdrop"
+        experiment_name+="_qrate_{}".format(args.qk_dropout)
+    if args.dropout_on =='qk':
+        experiment_name+="_qkdrop"  
+        experiment_name+="_qkrate_{}".format(args.qk_dropout) 
+    if args.dropkey:
+        experiment_name+="_dropkey_{}".format(args.mask_ratio)
+    experiment_name+="_attndrop_{}".format(args.attn_dropout)
+    experiment_name+="_mlpdrop_{}".format(args.mlp_dropout)
     print(f"Experiment:{experiment_name}")
     return experiment_name

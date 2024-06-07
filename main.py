@@ -1,6 +1,11 @@
+import os
+
+# Set the visible GPU devices to 0 and 1
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 import argparse
 
-import comet_ml
+# import comet_ml
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,6 +13,7 @@ import torchvision
 import pytorch_lightning as pl
 import warmup_scheduler
 import numpy as np
+import time
 
 from utils import get_model, get_dataset, get_experiment_name, get_criterion
 from da import CutMix, MixUp
@@ -25,7 +31,7 @@ parser.add_argument("--min-lr", default=1e-5, type=float)
 parser.add_argument("--beta1", default=0.9, type=float)
 parser.add_argument("--beta2", default=0.999, type=float)
 parser.add_argument("--off-benchmark", action="store_true")
-parser.add_argument("--max-epochs", default=200, type=int)
+parser.add_argument("--max-epochs", default=500, type=int)
 parser.add_argument("--dry-run", action="store_true")
 parser.add_argument("--weight-decay", default=5e-5, type=float)
 parser.add_argument("--warmup-epoch", default=5, type=int)
@@ -37,7 +43,14 @@ parser.add_argument("--smoothing", default=0.1, type=float)
 parser.add_argument("--rcpaste", action="store_true")
 parser.add_argument("--cutmix", action="store_true")
 parser.add_argument("--mixup", action="store_true")
-parser.add_argument("--dropout", default=0.0, type=float)
+
+parser.add_argument("--mlp_dropout", default=0.0, type=float) 
+parser.add_argument("--attn_dropout", default=0.0, type=float) 
+parser.add_argument("--qk_dropout", default=0.0, type=float)
+parser.add_argument("--dropout_on", default='None', type=str)
+parser.add_argument("--dropkey", default=False, action="store_true")
+parser.add_argument("--mask_ratio", default=0.0, type=float)
+
 parser.add_argument("--head", default=12, type=int)
 parser.add_argument("--num-layers", default=7, type=int)
 parser.add_argument("--hidden", default=384, type=int)
@@ -50,6 +63,7 @@ torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 args.benchmark = True if not args.off_benchmark else False
 args.gpus = torch.cuda.device_count()
+print('args.gpus', args.gpus)
 args.num_workers = 4*args.gpus if args.gpus else 8
 args.is_cls_token = True if not args.off_cls_token else False
 if not args.gpus:
@@ -111,6 +125,7 @@ class Net(pl.LightningModule):
 
     def training_epoch_end(self, outputs):
         self.log("lr", self.optimizer.param_groups[0]["lr"], on_epoch=self.current_epoch)
+        self.log("qk_drop_rate", self.hparams.qk_dropout, on_epoch=self.current_epoch)
 
     def validation_step(self, batch, batch_idx):
         img, label = batch
@@ -130,24 +145,38 @@ class Net(pl.LightningModule):
 if __name__ == "__main__":
     experiment_name = get_experiment_name(args)
     print(experiment_name)
+
+    month_day = time.strftime("%m%d")
+    hour_min_second = time.strftime("%H%M")
+    time_version = os.path.join(month_day, hour_min_second)
     if args.api_key:
         print("[INFO] Log with Comet.ml!")
-        logger = pl.loggers.CometLogger(
+        csv_logger = pl.loggers.CometLogger(
             api_key=args.api_key,
-            save_dir="logs",
+            save_dir="logs/new",
             project_name=args.project_name,
             experiment_name=experiment_name
         )
         refresh_rate = 0
     else:
         print("[INFO] Log with CSV")
-        logger = pl.loggers.CSVLogger(
-            save_dir="logs",
-            name=experiment_name
+        csv_logger = pl.loggers.CSVLogger(
+            save_dir="logs/new",
+            name=experiment_name, 
+            version=time_version
         )
         refresh_rate = 1
+    
+    # add tensorboard logger
+    tensorboard_logger = pl.loggers.TensorBoardLogger(save_dir="logs/new", name=experiment_name, version=time_version)
+    checkpoint_callback = pl.callbacks.ModelCheckpoint(monitor="val_loss", 
+                                                       dirpath=str(os.path.join("logs/new", experiment_name, time_version, "checkpoints")), 
+                                                       save_last=True,)
+
+    logger=[tensorboard_logger, csv_logger]
+
     net = Net(args)
-    trainer = pl.Trainer(precision=args.precision,fast_dev_run=args.dry_run, gpus=args.gpus, benchmark=args.benchmark, logger=logger, max_epochs=args.max_epochs, weights_summary="full", progress_bar_refresh_rate=refresh_rate)
+    trainer = pl.Trainer(precision=args.precision,fast_dev_run=args.dry_run, gpus=args.gpus, benchmark=args.benchmark, logger=logger, max_epochs=args.max_epochs, weights_summary="full", progress_bar_refresh_rate=refresh_rate, callbacks=[checkpoint_callback])
     trainer.fit(model=net, train_dataloader=train_dl, val_dataloaders=test_dl)
     if not args.dry_run:
         model_path = f"weights/{experiment_name}.pth"
